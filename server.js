@@ -65,6 +65,7 @@ const pool = new Pool(
 );
 
 pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS w9_url TEXT, ADD COLUMN IF NOT EXISTS cert_url TEXT, ADD COLUMN IF NOT EXISTS cert_type TEXT, ADD COLUMN IF NOT EXISTS paca_number TEXT, ADD COLUMN IF NOT EXISTS phone_number TEXT;`).catch(err => {});
+pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_account_id TEXT;`).catch(err => {});
 pool.query(`ALTER TABLE pallets ADD COLUMN IF NOT EXISTS pack_style TEXT, ADD COLUMN IF NOT EXISTS weight TEXT, ADD COLUMN IF NOT EXISTS variety TEXT, ADD COLUMN IF NOT EXISTS location TEXT, ADD COLUMN IF NOT EXISTS loading_window TEXT, ADD COLUMN IF NOT EXISTS grade TEXT, ADD COLUMN IF NOT EXISTS photo_url_2 TEXT, ADD COLUMN IF NOT EXISTS size TEXT, ADD COLUMN IF NOT EXISTS payment_terms TEXT, ADD COLUMN IF NOT EXISTS storage_temp TEXT, ADD COLUMN IF NOT EXISTS brand TEXT, ADD COLUMN IF NOT EXISTS lat DECIMAL(10,6), ADD COLUMN IF NOT EXISTS lon DECIMAL(10,6), ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'available', ADD COLUMN IF NOT EXISTS pallets_available INT DEFAULT 1, ADD COLUMN IF NOT EXISTS boxes_per_pallet INT DEFAULT 54;`).catch(err => {});
 pool.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS payment_status TEXT DEFAULT 'unpaid', ADD COLUMN IF NOT EXISTS appointment_time TEXT, ADD COLUMN IF NOT EXISTS purchased_boxes INT DEFAULT 1, ADD COLUMN IF NOT EXISTS purchased_pallets INT DEFAULT 1;`).catch(err => {});
 pool.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS payout_status TEXT DEFAULT 'pending';`).catch(err => {});
@@ -261,6 +262,12 @@ app.post('/api/offers/make', async (req, res) => {
   const { pallet_id, buyer_id, grower_id, offer_amount, appointment_time, buy_pallets } = req.body;
   const requested_pallets = parseInt(buy_pallets) || 1;
   try {
+    // 🔒 EXTREME SECURITY: Backend Compliance Check
+    const buyerCheck = await pool.query("SELECT w9_url FROM users WHERE id = $1", [buyer_id]);
+    if (!buyerCheck.rows[0] || !buyerCheck.rows[0].w9_url) {
+      return res.status(403).json({ success: false, message: '🛑 COMPLIANCE HOLD: Server rejected offer. W-9 missing.' });
+    }
+
     await pool.query("INSERT INTO offers (pallet_id, buyer_id, grower_id, current_offer, last_actor, appointment_time, requested_pallets) VALUES ($1, $2, $3, $4, 'buyer', $5, $6)", [pallet_id, buyer_id, grower_id, offer_amount, appointment_time, requested_pallets]);
     res.json({ success: true, message: 'Offer submitted to grower!' });
   } catch (err) { res.status(500).json({ success: false }); }
@@ -410,6 +417,10 @@ app.delete('/api/admin-delete-pallet/:id', async (req, res) => {
 app.get('/api/grower-dashboard/:id', async (req, res) => {
   const { id } = req.params;
   try {
+    // Check if the grower has linked their bank
+    const userRes = await pool.query('SELECT stripe_account_id FROM users WHERE id = $1', [id]);
+    const stripeAccountId = userRes.rows[0]?.stripe_account_id;
+
     const pos = await pool.query(`SELECT po.*, p.commodity_type, po.purchased_boxes, po.purchased_pallets FROM purchase_orders po JOIN pallets p ON po.pallet_id = p.id WHERE p.grower_id = $1`, [id]);
     let totalProfit = 0;
     let availableBalance = 0;
@@ -422,8 +433,47 @@ app.get('/api/grower-dashboard/:id', async (req, res) => {
       }
       return { ...po, net_profit: fruitRevenue.toFixed(2) };
     });
-    res.json({ success: true, total_net_profit: totalProfit.toFixed(2), available_balance: availableBalance.toFixed(2), pallet_breakdown: breakdown });
+    
+    // We now send the stripe_account_id back to the frontend!
+    res.json({ success: true, stripe_account_id: stripeAccountId, total_net_profit: totalProfit.toFixed(2), available_balance: availableBalance.toFixed(2), pallet_breakdown: breakdown });
   } catch (err) { res.status(500).json({ success: false }); }
+});
+
+// NEW: The Stripe Connect Onboarding Route
+app.post('/api/stripe/onboard', async (req, res) => {
+  const { grower_id } = req.body;
+  const origin = req.get('origin') || 'http://localhost:5174'; 
+  try {
+    const userRes = await pool.query('SELECT * FROM users WHERE id = $1', [grower_id]);
+    const user = userRes.rows[0];
+    let accountId = user.stripe_account_id;
+
+    // If they don't have a Stripe account yet, create a blank one for them
+    if (!accountId) {
+      const account = await stripe.accounts.create({
+        type: 'express',
+        email: user.email,
+        capabilities: { transfers: { requested: true } },
+        business_type: 'company',
+        company: { name: user.company_name }
+      });
+      accountId = account.id;
+      await pool.query('UPDATE users SET stripe_account_id = $1 WHERE id = $2', [accountId, grower_id]);
+    }
+
+    // Generate the highly secure, one-time-use setup link
+    const accountLink = await stripe.accountLinks.create({
+      account: accountId,
+      refresh_url: `${origin}/`,
+      return_url: `${origin}/`,
+      type: 'account_onboarding',
+    });
+
+    res.json({ success: true, url: accountLink.url });
+  } catch (err) {
+    console.error("Stripe Connect Error:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
 });
 
 // NEW: The Cash Out Endpoint
