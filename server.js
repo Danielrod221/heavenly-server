@@ -141,10 +141,21 @@ Phone: ${grower.phone_number || 'Contact via email above'}${apptText}
     console.log('\x1b[36m%s\x1b[0m', '================================================\n');
     return;
   }
-  try {
-    await transporter.sendMail({ from: process.env.EMAIL_USER, to: grower.email, subject: growerSubject, text: growerBody });
-    await transporter.sendMail({ from: process.env.EMAIL_USER, to: buyer.email, subject: buyerSubject, text: buyerBody });
-  } catch (err) { console.log('Email delivery failed:', err); }
+  // 1. Try to email the Grower (if it fails, just log it and move on!)
+  await transporter.sendMail({ 
+    from: process.env.EMAIL_USER, 
+    to: grower.email, 
+    subject: growerSubject, 
+    text: growerBody 
+  }).catch(err => console.log('Grower email skipped/failed:', err.message));
+
+  // 2. Try to email the Buyer (completely independent of the Grower!)
+  await transporter.sendMail({ 
+    from: process.env.EMAIL_USER, 
+    to: buyer.email, 
+    subject: buyerSubject, 
+    text: buyerBody 
+  }).catch(err => console.log('Buyer email skipped/failed:', err.message));
 };
 
 app.post('/api/login', async (req, res) => {
