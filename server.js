@@ -601,24 +601,30 @@ app.put('/api/edit-pallet/:id', async (req, res) => {
 // ==========================================
 // 🛠️ MAGIC DATABASE BUILDER ROUTE (TROJAN HORSE)
 // ==========================================
+// ==========================================
+// 🛠️ MAGIC DATABASE BUILDER ROUTE (TROJAN HORSE)
+// ==========================================
 app.get('/api/seed', async (req, res) => {
     try {
         console.log('Dropping old tables...');
         await pool.query('DROP TABLE IF EXISTS offers, purchase_orders, pallets, users, invite_requests CASCADE;');
         
         console.log('Creating users table...');
-        await pool.query(`CREATE TABLE users (id SERIAL PRIMARY KEY, email VARCHAR(255) UNIQUE NOT NULL, password_hash VARCHAR(255) NOT NULL, role VARCHAR(50) NOT NULL, company_name VARCHAR(255), paca_number VARCHAR(255), w9_url TEXT, cert_url TEXT, cert_type VARCHAR(100), phone_number TEXT);`);
+        // 🔒 ADDED stripe_account_id
+        await pool.query(`CREATE TABLE users (id SERIAL PRIMARY KEY, email VARCHAR(255) UNIQUE NOT NULL, password_hash VARCHAR(255) NOT NULL, role VARCHAR(50) NOT NULL, company_name VARCHAR(255), paca_number VARCHAR(255), w9_url TEXT, cert_url TEXT, cert_type VARCHAR(100), phone_number TEXT, stripe_account_id TEXT);`);
         
         console.log('Creating pallets table...');
         await pool.query(`CREATE TABLE pallets (id SERIAL PRIMARY KEY, grower_id INTEGER REFERENCES users(id), commodity_type VARCHAR(255), variety VARCHAR(255), brand VARCHAR(255), pack_style VARCHAR(255), weight VARCHAR(255), size VARCHAR(255), pallets_available INTEGER DEFAULT 1, boxes_per_pallet INTEGER DEFAULT 54, quantity_boxes INTEGER, asking_price DECIMAL(10,2), grade VARCHAR(100), payment_terms VARCHAR(100), location VARCHAR(255), lat DECIMAL(10,6), lon DECIMAL(10,6), loading_window VARCHAR(255), storage_temp VARCHAR(100), status VARCHAR(50) DEFAULT 'available', photo_url TEXT, photo_url_2 TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`);
         
         console.log('Creating orders table...');
-        await pool.query(`CREATE TABLE purchase_orders (id SERIAL PRIMARY KEY, buyer_id INTEGER REFERENCES users(id), pallet_id INTEGER REFERENCES pallets(id), po_number VARCHAR(255), sold_price DECIMAL(10,2), toll_fee DECIMAL(10,2), total_cost DECIMAL(10,2), purchased_pallets INTEGER DEFAULT 1, purchased_boxes INTEGER DEFAULT 1, payment_status VARCHAR(50) DEFAULT 'unpaid', appointment_time TIMESTAMP, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`);
+        // 🔒 ADDED payout_status
+        await pool.query(`CREATE TABLE purchase_orders (id SERIAL PRIMARY KEY, buyer_id INTEGER REFERENCES users(id), pallet_id INTEGER REFERENCES pallets(id), po_number VARCHAR(255), sold_price DECIMAL(10,2), toll_fee DECIMAL(10,2), total_cost DECIMAL(10,2), purchased_pallets INTEGER DEFAULT 1, purchased_boxes INTEGER DEFAULT 1, payment_status VARCHAR(50) DEFAULT 'unpaid', payout_status VARCHAR(50) DEFAULT 'pending', appointment_time TIMESTAMP, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`);
         
         console.log('Creating offers table...');
+        await pool.query(`CREATE TABLE offers (id SERIAL PRIMARY KEY, pallet_id INTEGER REFERENCES pallets(id), buyer_id INTEGER REFERENCES users(id), grower_id INTEGER REFERENCES users(id), asking_price DECIMAL(10,2), current_offer DECIMAL(10,2), requested_pallets INTEGER DEFAULT 1, appointment_time TIMESTAMP, status VARCHAR(50) DEFAULT 'pending', last_actor VARCHAR(50), grower_counter_count INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`);
+        
         console.log('Creating invite_requests table...');
         await pool.query(`CREATE TABLE invite_requests (id SERIAL PRIMARY KEY, company_name VARCHAR(255), contact_name VARCHAR(255), email VARCHAR(255), paca_number VARCHAR(255), status VARCHAR(50) DEFAULT 'pending', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`);
-        await pool.query(`CREATE TABLE offers (id SERIAL PRIMARY KEY, pallet_id INTEGER REFERENCES pallets(id), buyer_id INTEGER REFERENCES users(id), grower_id INTEGER REFERENCES users(id), asking_price DECIMAL(10,2), current_offer DECIMAL(10,2), requested_pallets INTEGER DEFAULT 1, appointment_time TIMESTAMP, status VARCHAR(50) DEFAULT 'pending', last_actor VARCHAR(50), grower_counter_count INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`);
         
         console.log('Creating demo accounts...');
         const hashedPassword = await bcrypt.hash('password123', 10);
