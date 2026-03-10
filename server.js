@@ -439,6 +439,8 @@ app.get('/api/seed', async (req, res) => {
         await pool.query(`CREATE TABLE purchase_orders (id SERIAL PRIMARY KEY, buyer_id INTEGER REFERENCES users(id), pallet_id INTEGER REFERENCES pallets(id), po_number VARCHAR(255), sold_price DECIMAL(10,2), toll_fee DECIMAL(10,2), total_cost DECIMAL(10,2), purchased_pallets INTEGER DEFAULT 1, purchased_boxes INTEGER DEFAULT 1, payment_status VARCHAR(50) DEFAULT 'unpaid', appointment_time TIMESTAMP, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`);
         
         console.log('Creating offers table...');
+        console.log('Creating invite_requests table...');
+        await pool.query(`CREATE TABLE invite_requests (id SERIAL PRIMARY KEY, company_name VARCHAR(255), contact_name VARCHAR(255), email VARCHAR(255), paca_number VARCHAR(255), status VARCHAR(50) DEFAULT 'pending', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`);
         await pool.query(`CREATE TABLE offers (id SERIAL PRIMARY KEY, pallet_id INTEGER REFERENCES pallets(id), buyer_id INTEGER REFERENCES users(id), grower_id INTEGER REFERENCES users(id), asking_price DECIMAL(10,2), current_offer DECIMAL(10,2), requested_pallets INTEGER DEFAULT 1, appointment_time TIMESTAMP, status VARCHAR(50) DEFAULT 'pending', last_actor VARCHAR(50), grower_counter_count INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`);
         
         console.log('Creating demo accounts...');
@@ -456,6 +458,38 @@ app.get('/api/seed', async (req, res) => {
 // ==========================================
 
 const PORT = process.env.PORT || 3000;
+// --- GROWER INVITE REQUEST APIS ---
+app.post('/api/request-invite', async (req, res) => {
+    const { company_name, contact_name, email, paca_number } = req.body;
+    try {
+        await pool.query(
+            `INSERT INTO invite_requests (company_name, contact_name, email, paca_number) VALUES ($1, $2, $3, $4)`,
+            [company_name, contact_name, email, paca_number]
+        );
+        res.json({ success: true });
+    } catch (err) {
+        console.error("Invite Error:", err);
+        res.status(500).json({ success: false, message: 'Database error' });
+    }
+});
+
+app.get('/api/admin-requests', async (req, res) => {
+    try {
+        const result = await pool.query(`SELECT * FROM invite_requests WHERE status = 'pending' ORDER BY created_at DESC`);
+        res.json({ success: true, requests: result.rows });
+    } catch (err) {
+        res.status(500).json({ success: false });
+    }
+});
+
+app.post('/api/admin-requests/dismiss', async (req, res) => {
+    try {
+        await pool.query(`UPDATE invite_requests SET status = 'dismissed' WHERE id = $1`, [req.body.request_id]);
+        res.json({ success: true });
+    } catch (err) {
+        res.json({ success: false });
+    }
+});
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Heavy Terminal server is running on port ${PORT}`);
 });
