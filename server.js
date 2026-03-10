@@ -21,12 +21,12 @@ app.use(cors());
 app.use(express.json());
 app.use('/uploads', express.static(uploadDir));
 
-const pool = new Pool({
-  user: process.env.DB_USER, 
-  database: process.env.DB_DATABASE,
-  host: process.env.DB_HOST,
-  port: process.env.DB_PORT 
-});
+// ☁️ UPDATED: Smart Cloud Connection (Uses DATABASE_URL if available, falls back to local if not)
+const pool = new Pool(
+  process.env.DATABASE_URL 
+    ? { connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } }
+    : { user: process.env.DB_USER, database: process.env.DB_DATABASE, host: process.env.DB_HOST, port: process.env.DB_PORT }
+);
 
 pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS w9_url TEXT, ADD COLUMN IF NOT EXISTS cert_url TEXT, ADD COLUMN IF NOT EXISTS cert_type TEXT, ADD COLUMN IF NOT EXISTS paca_number TEXT, ADD COLUMN IF NOT EXISTS phone_number TEXT;`).catch(err => {});
 pool.query(`ALTER TABLE pallets ADD COLUMN IF NOT EXISTS pack_style TEXT, ADD COLUMN IF NOT EXISTS weight TEXT, ADD COLUMN IF NOT EXISTS variety TEXT, ADD COLUMN IF NOT EXISTS location TEXT, ADD COLUMN IF NOT EXISTS loading_window TEXT, ADD COLUMN IF NOT EXISTS grade TEXT, ADD COLUMN IF NOT EXISTS photo_url_2 TEXT, ADD COLUMN IF NOT EXISTS size TEXT, ADD COLUMN IF NOT EXISTS payment_terms TEXT, ADD COLUMN IF NOT EXISTS storage_temp TEXT, ADD COLUMN IF NOT EXISTS brand TEXT, ADD COLUMN IF NOT EXISTS lat DECIMAL(10,6), ADD COLUMN IF NOT EXISTS lon DECIMAL(10,6), ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'available', ADD COLUMN IF NOT EXISTS pallets_available INT DEFAULT 1, ADD COLUMN IF NOT EXISTS boxes_per_pallet INT DEFAULT 54;`).catch(err => {});
@@ -420,6 +420,40 @@ app.put('/api/edit-pallet/:id', async (req, res) => {
   const { pallets_available, asking_price } = req.body;
   try { await pool.query("UPDATE pallets SET pallets_available = $1, asking_price = $2 WHERE id = $3", [pallets_available, asking_price, req.params.id]); res.json({ success: true }); } catch (err) { res.status(500).json({ success: false }); }
 });
+
+// ==========================================
+// 🛠️ MAGIC DATABASE BUILDER ROUTE (TROJAN HORSE)
+// ==========================================
+app.get('/api/seed', async (req, res) => {
+    try {
+        console.log('Dropping old tables...');
+        await pool.query('DROP TABLE IF EXISTS offers, purchase_orders, pallets, users CASCADE;');
+        
+        console.log('Creating users table...');
+        await pool.query(`CREATE TABLE users (id SERIAL PRIMARY KEY, email VARCHAR(255) UNIQUE NOT NULL, password_hash VARCHAR(255) NOT NULL, role VARCHAR(50) NOT NULL, company_name VARCHAR(255), paca_number VARCHAR(255), w9_url TEXT, cert_url TEXT, cert_type VARCHAR(100), phone_number TEXT);`);
+        
+        console.log('Creating pallets table...');
+        await pool.query(`CREATE TABLE pallets (id SERIAL PRIMARY KEY, grower_id INTEGER REFERENCES users(id), commodity_type VARCHAR(255), variety VARCHAR(255), brand VARCHAR(255), pack_style VARCHAR(255), weight VARCHAR(255), size VARCHAR(255), pallets_available INTEGER DEFAULT 1, boxes_per_pallet INTEGER DEFAULT 54, quantity_boxes INTEGER, asking_price DECIMAL(10,2), grade VARCHAR(100), payment_terms VARCHAR(100), location VARCHAR(255), lat DECIMAL(10,6), lon DECIMAL(10,6), loading_window VARCHAR(255), storage_temp VARCHAR(100), status VARCHAR(50) DEFAULT 'available', photo_url TEXT, photo_url_2 TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`);
+        
+        console.log('Creating orders table...');
+        await pool.query(`CREATE TABLE purchase_orders (id SERIAL PRIMARY KEY, buyer_id INTEGER REFERENCES users(id), pallet_id INTEGER REFERENCES pallets(id), po_number VARCHAR(255), sold_price DECIMAL(10,2), toll_fee DECIMAL(10,2), total_cost DECIMAL(10,2), purchased_pallets INTEGER DEFAULT 1, purchased_boxes INTEGER DEFAULT 1, payment_status VARCHAR(50) DEFAULT 'unpaid', appointment_time TIMESTAMP, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`);
+        
+        console.log('Creating offers table...');
+        await pool.query(`CREATE TABLE offers (id SERIAL PRIMARY KEY, pallet_id INTEGER REFERENCES pallets(id), buyer_id INTEGER REFERENCES users(id), grower_id INTEGER REFERENCES users(id), asking_price DECIMAL(10,2), current_offer DECIMAL(10,2), requested_pallets INTEGER DEFAULT 1, appointment_time TIMESTAMP, status VARCHAR(50) DEFAULT 'pending', last_actor VARCHAR(50), grower_counter_count INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`);
+        
+        console.log('Creating demo accounts...');
+        const hashedPassword = await bcrypt.hash('password123', 10);
+        await pool.query(`INSERT INTO users (email, password_hash, role, company_name) VALUES ('admin@heavenly.com', $1, 'admin', 'Heavy Terminal HQ');`, [hashedPassword]);
+        await pool.query(`INSERT INTO users (email, password_hash, role, company_name) VALUES ('buyer@test.com', $1, 'buyer', 'Fresh Markets Inc.');`, [hashedPassword]);
+        await pool.query(`INSERT INTO users (email, password_hash, role, company_name) VALUES ('grower@test.com', $1, 'grower', 'Heavenly Farms');`, [hashedPassword]);
+
+        res.send('<h1 style="color: green; font-family: sans-serif; text-align: center; margin-top: 50px;">✅ SUCCESS! The Cloud Database is built! Go to your iPhone and log in!</h1>');
+    } catch (error) {
+        console.error(error);
+        res.send(`<h1 style="color: red; font-family: sans-serif; text-align: center; margin-top: 50px;">❌ Error building DB: ${error.message}</h1>`);
+    }
+});
+// ==========================================
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
