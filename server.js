@@ -74,8 +74,17 @@ const upload = multer({ storage: storage });
 // ==========================================
 
 const transporter = nodemailer.createTransport({
-  service: 'gmail', 
-  auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
+  host: 'smtp.gmail.com',
+  port: 465,
+  secure: true, // Forces SSL secure connection
+  auth: { 
+    user: process.env.EMAIL_USER, 
+    pass: process.env.EMAIL_PASS 
+  },
+  tls: {
+    // Do not fail on invalid certs (helps bypass strict cloud firewalls)
+    rejectUnauthorized: false
+  }
 });
 
 const dispatchTransactionEmails = async (buyer, grower, pallet, poNumber, appointmentTime, purchasedPallets, purchasedBoxes) => {
