@@ -604,7 +604,7 @@ app.put('/api/edit-pallet/:id', async (req, res) => {
 app.get('/api/seed', async (req, res) => {
     try {
         console.log('Dropping old tables...');
-        await pool.query('DROP TABLE IF EXISTS offers, purchase_orders, pallets, users CASCADE;');
+        await pool.query('DROP TABLE IF EXISTS offers, purchase_orders, pallets, users, invite_requests CASCADE;');
         
         console.log('Creating users table...');
         await pool.query(`CREATE TABLE users (id SERIAL PRIMARY KEY, email VARCHAR(255) UNIQUE NOT NULL, password_hash VARCHAR(255) NOT NULL, role VARCHAR(50) NOT NULL, company_name VARCHAR(255), paca_number VARCHAR(255), w9_url TEXT, cert_url TEXT, cert_type VARCHAR(100), phone_number TEXT);`);
