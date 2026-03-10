@@ -477,13 +477,58 @@ app.post('/api/stripe/onboard', async (req, res) => {
 });
 
 // NEW: The Cash Out Endpoint
+// NEW: The Live-Money Cash Out Endpoint
 app.post('/api/cash-out', async (req, res) => {
   const { grower_id } = req.body;
   try {
-    // Mark all available paid funds as cashed out
-    await pool.query(`UPDATE purchase_orders SET payout_status = 'cashed_out' WHERE payment_status = 'paid' AND payout_status != 'cashed_out' AND pallet_id IN (SELECT id FROM pallets WHERE grower_id = $1)`, [grower_id]);
+    // 1. Get the Grower's secure Stripe Account ID
+    const userRes = await pool.query('SELECT stripe_account_id FROM users WHERE id = $1', [grower_id]);
+    const stripeAccountId = userRes.rows[0]?.stripe_account_id;
+
+    if (!stripeAccountId) {
+      return res.status(400).json({ success: false, message: 'No linked bank account found.' });
+    }
+
+    // 2. Securely calculate exact amount owed directly from the database (Never trust the frontend)
+    const poRes = await pool.query(`
+      SELECT po.sold_price, po.purchased_boxes, po.id 
+      FROM purchase_orders po 
+      JOIN pallets p ON po.pallet_id = p.id 
+      WHERE p.grower_id = $1 AND po.payment_status = 'paid' AND po.payout_status != 'cashed_out'
+    `, [grower_id]);
+
+    if (poRes.rows.length === 0) {
+      return res.status(400).json({ success: false, message: 'No available funds to withdraw.' });
+    }
+
+    let totalAmountToTransfer = 0;
+    const poIdsToUpdate = [];
+
+    poRes.rows.forEach(po => {
+      totalAmountToTransfer += parseFloat(po.sold_price) * parseInt(po.purchased_boxes);
+      poIdsToUpdate.push(po.id);
+    });
+
+    // Stripe requires amounts to be in pennies (e.g., $50.00 = 5000)
+    const transferAmountCents = Math.round(totalAmountToTransfer * 100);
+
+    // 3. 💸 COMMAND STRIPE TO MOVE THE MONEY
+    const transfer = await stripe.transfers.create({
+      amount: transferAmountCents,
+      currency: 'usd',
+      destination: stripeAccountId,
+    });
+
+    // 4. If the Stripe transfer succeeds, update the database ledger
+    await pool.query(`UPDATE purchase_orders SET payout_status = 'cashed_out' WHERE id = ANY($1::int[])`, [poIdsToUpdate]);
+
+    console.log(`✅ SUCCESS: Transferred $${totalAmountToTransfer} to Grower ${grower_id}`);
     res.json({ success: true, message: 'Funds are on the way to your linked bank account!' });
-  } catch (err) { res.status(500).json({ success: false }); }
+
+  } catch (err) { 
+    console.error('Transfer Error:', err);
+    res.status(500).json({ success: false, message: err.message }); 
+  }
 });
 app.get('/api/buyer-orders/:id', async (req, res) => {
   const { id } = req.params;
