@@ -31,6 +31,7 @@ const pool = new Pool(
 pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS w9_url TEXT, ADD COLUMN IF NOT EXISTS cert_url TEXT, ADD COLUMN IF NOT EXISTS cert_type TEXT, ADD COLUMN IF NOT EXISTS paca_number TEXT, ADD COLUMN IF NOT EXISTS phone_number TEXT;`).catch(err => {});
 pool.query(`ALTER TABLE pallets ADD COLUMN IF NOT EXISTS pack_style TEXT, ADD COLUMN IF NOT EXISTS weight TEXT, ADD COLUMN IF NOT EXISTS variety TEXT, ADD COLUMN IF NOT EXISTS location TEXT, ADD COLUMN IF NOT EXISTS loading_window TEXT, ADD COLUMN IF NOT EXISTS grade TEXT, ADD COLUMN IF NOT EXISTS photo_url_2 TEXT, ADD COLUMN IF NOT EXISTS size TEXT, ADD COLUMN IF NOT EXISTS payment_terms TEXT, ADD COLUMN IF NOT EXISTS storage_temp TEXT, ADD COLUMN IF NOT EXISTS brand TEXT, ADD COLUMN IF NOT EXISTS lat DECIMAL(10,6), ADD COLUMN IF NOT EXISTS lon DECIMAL(10,6), ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'available', ADD COLUMN IF NOT EXISTS pallets_available INT DEFAULT 1, ADD COLUMN IF NOT EXISTS boxes_per_pallet INT DEFAULT 54;`).catch(err => {});
 pool.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS payment_status TEXT DEFAULT 'unpaid', ADD COLUMN IF NOT EXISTS appointment_time TEXT, ADD COLUMN IF NOT EXISTS purchased_boxes INT DEFAULT 1, ADD COLUMN IF NOT EXISTS purchased_pallets INT DEFAULT 1;`).catch(err => {});
+pool.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS payout_status TEXT DEFAULT 'pending';`).catch(err => {});
 pool.query(`CREATE TABLE IF NOT EXISTS offers (id SERIAL PRIMARY KEY, pallet_id INT, buyer_id INT, grower_id INT, current_offer DECIMAL(10,2), last_actor TEXT, grower_counter_count INT DEFAULT 0, status TEXT DEFAULT 'pending', appointment_time TEXT, requested_pallets INT DEFAULT 1);`).catch(err => {});
 pool.query(`CREATE TABLE IF NOT EXISTS invite_requests (id SERIAL PRIMARY KEY, company_name VARCHAR(255), contact_name VARCHAR(255), email VARCHAR(255), paca_number VARCHAR(255), status VARCHAR(50) DEFAULT 'pending', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`).catch(err => console.error(err));
 
@@ -344,14 +345,29 @@ app.delete('/api/admin-delete-pallet/:id', async (req, res) => {
 app.get('/api/grower-dashboard/:id', async (req, res) => {
   const { id } = req.params;
   try {
-const pos = await pool.query(`SELECT po.*, p.commodity_type, po.purchased_boxes, po.purchased_pallets FROM purchase_orders po JOIN pallets p ON po.pallet_id = p.id WHERE p.grower_id = $1`, [id]);
+    const pos = await pool.query(`SELECT po.*, p.commodity_type, po.purchased_boxes, po.purchased_pallets FROM purchase_orders po JOIN pallets p ON po.pallet_id = p.id WHERE p.grower_id = $1`, [id]);
     let totalProfit = 0;
+    let availableBalance = 0;
     const breakdown = pos.rows.map(po => {
       const fruitRevenue = parseFloat(po.sold_price) * parseInt(po.purchased_boxes);
-      totalProfit += fruitRevenue; 
+      totalProfit += fruitRevenue;
+      // If the buyer paid, and the grower hasn't cashed it out yet, it goes into the Available Balance!
+      if (po.payment_status === 'paid' && po.payout_status !== 'cashed_out') {
+         availableBalance += fruitRevenue;
+      }
       return { ...po, net_profit: fruitRevenue.toFixed(2) };
     });
-    res.json({ success: true, total_net_profit: totalProfit.toFixed(2), pallet_breakdown: breakdown });
+    res.json({ success: true, total_net_profit: totalProfit.toFixed(2), available_balance: availableBalance.toFixed(2), pallet_breakdown: breakdown });
+  } catch (err) { res.status(500).json({ success: false }); }
+});
+
+// NEW: The Cash Out Endpoint
+app.post('/api/cash-out', async (req, res) => {
+  const { grower_id } = req.body;
+  try {
+    // Mark all available paid funds as cashed out
+    await pool.query(`UPDATE purchase_orders SET payout_status = 'cashed_out' WHERE payment_status = 'paid' AND payout_status != 'cashed_out' AND pallet_id IN (SELECT id FROM pallets WHERE grower_id = $1)`, [grower_id]);
+    res.json({ success: true, message: 'Funds are on the way to your linked bank account!' });
   } catch (err) { res.status(500).json({ success: false }); }
 });
 app.get('/api/buyer-orders/:id', async (req, res) => {
