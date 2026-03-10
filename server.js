@@ -421,4 +421,7 @@ app.put('/api/edit-pallet/:id', async (req, res) => {
   try { await pool.query("UPDATE pallets SET pallets_available = $1, asking_price = $2 WHERE id = $3", [pallets_available, asking_price, req.params.id]); res.json({ success: true }); } catch (err) { res.status(500).json({ success: false }); }
 });
 
-app.listen(3000, () => console.log('🚀 Heavy Terminal server is running on port 3000'));
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Heavy Terminal server is running on port ${PORT}`);
+});
