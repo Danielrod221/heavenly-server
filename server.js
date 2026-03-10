@@ -454,6 +454,7 @@ app.post('/api/stripe/onboard', async (req, res) => {
     if (!accountId) {
       const account = await stripe.accounts.create({
         type: 'express',
+        country: 'US',
         email: user.email,
         capabilities: {
           transfers: { requested: true }, // 🔑 THE MISSING MAGIC KEY!
