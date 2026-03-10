@@ -440,39 +440,42 @@ app.get('/api/grower-dashboard/:id', async (req, res) => {
 });
 
 // NEW: The Stripe Connect Onboarding Route
+// ==========================================
+// 🏦 STRIPE CONNECT ONBOARDING ROUTE
+// ==========================================
 app.post('/api/stripe/onboard', async (req, res) => {
   const { grower_id } = req.body;
-  const origin = req.get('origin') || 'http://localhost:5174'; 
   try {
     const userRes = await pool.query('SELECT * FROM users WHERE id = $1', [grower_id]);
     const user = userRes.rows[0];
     let accountId = user.stripe_account_id;
 
-    // If they don't have a Stripe account yet, create a blank one for them
+    // If they don't have a Stripe account yet, create one WITH transfer permissions!
     if (!accountId) {
       const account = await stripe.accounts.create({
         type: 'express',
         email: user.email,
-        capabilities: { transfers: { requested: true } },
-        business_type: 'company',
-        company: { name: user.company_name }
+        capabilities: {
+          transfers: { requested: true }, // 🔑 THE MISSING MAGIC KEY!
+        },
       });
       accountId = account.id;
+      // Save the new Stripe ID to the database
       await pool.query('UPDATE users SET stripe_account_id = $1 WHERE id = $2', [accountId, grower_id]);
     }
 
-    // Generate the highly secure, one-time-use setup link
+    // Generate the secure portal link
     const accountLink = await stripe.accountLinks.create({
       account: accountId,
-      refresh_url: `${origin}/`,
-      return_url: `${origin}/`,
+      refresh_url: req.headers.origin || 'http://localhost:5173',
+      return_url: req.headers.origin || 'http://localhost:5173',
       type: 'account_onboarding',
     });
 
     res.json({ success: true, url: accountLink.url });
-  } catch (err) {
-    console.error("Stripe Connect Error:", err);
-    res.status(500).json({ success: false, message: err.message });
+  } catch (error) {
+    console.error('Stripe Onboard Error:', error);
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
