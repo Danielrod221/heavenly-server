@@ -344,7 +344,7 @@ app.delete('/api/admin-delete-pallet/:id', async (req, res) => {
 app.get('/api/grower-dashboard/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    const pos = await pool.query(`SELECT po.*, p.commodity_type, po.purchased_boxes, po.purchased_pallets, p.packed_timestamp FROM purchase_orders po JOIN pallets p ON po.pallet_id = p.id WHERE p.grower_id = $1`, [id]);
+const pos = await pool.query(`SELECT po.*, p.commodity_type, po.purchased_boxes, po.purchased_pallets FROM purchase_orders po JOIN pallets p ON po.pallet_id = p.id WHERE p.grower_id = $1`, [id]);
     let totalProfit = 0;
     const breakdown = pos.rows.map(po => {
       const fruitRevenue = parseFloat(po.sold_price) * parseInt(po.purchased_boxes);
