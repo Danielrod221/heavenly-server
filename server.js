@@ -18,6 +18,42 @@ if (!fs.existsSync(uploadDir)) { fs.mkdirSync(uploadDir); }
 
 const app = express();
 app.use(cors());
+
+// 🔒 STRIPE INITIALIZATION
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+
+// ==========================================
+// 🔒 THE FORT KNOX WEBHOOK 
+// (Must sit exactly here, ABOVE express.json so Stripe can read the raw encrypted body)
+// ==========================================
+app.post('/api/webhook', express.raw({type: 'application/json'}), async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+  let event;
+
+  try {
+    // Verify the encrypted signature from Stripe using your Webhook Secret
+    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    console.log(`⚠️ Webhook signature verification failed: ${err.message}`);
+    return res.status(400).send(`Webhook Error`);
+  }
+
+  // If the payment is 100% successful, verified, and money has moved:
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object;
+    const orderId = session.metadata.order_id; // Grab the secret PO ID we attached
+
+    try {
+      // Safely update the database (Bypassing the user entirely)
+      await pool.query(`UPDATE purchase_orders SET payment_status = 'paid' WHERE id = $1`, [orderId]);
+      console.log(`✅ Webhook verified: Order ${orderId} officially paid in full.`);
+    } catch (dbErr) {
+      console.log('Database error during webhook:', dbErr);
+    }
+  }
+  res.json({received: true});
+});
+
 app.use(express.json());
 app.use('/uploads', express.static(uploadDir));
 
@@ -195,6 +231,12 @@ app.post('/api/cancel-order', async (req, res) => {
 app.post('/api/buy-now', async (req, res) => {
   const { buyer_id, pallet_id, appointment_time, buy_pallets } = req.body;
   try {
+    // 🔒 EXTREME SECURITY: Backend Compliance Check
+    const buyerCheck = await pool.query("SELECT w9_url FROM users WHERE id = $1", [buyer_id]);
+    if (!buyerCheck.rows[0] || !buyerCheck.rows[0].w9_url) {
+      return res.status(403).json({ success: false, message: '🛑 COMPLIANCE HOLD: Server rejected transaction. W-9 missing.' });
+    }
+
     const palletQuery = await pool.query("SELECT * FROM pallets WHERE id = $1 AND status = 'available'", [pallet_id]);
     if (palletQuery.rows.length === 0) return res.status(400).json({ success: false, message: 'Pallet no longer available.' });
     const pallet = palletQuery.rows[0];
@@ -284,11 +326,11 @@ app.post('/api/create-checkout-session', async (req, res) => {
     if (!process.env.STRIPE_SECRET_KEY || process.env.STRIPE_SECRET_KEY === 'sk_test_placeholder') {
       return res.json({ success: true, url: `${origin}/?checkout_success=true&order_id=${order_id}` });
     }
-    const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
     const session = await stripe.checkout.sessions.create({
-      payment_method_types: ['card'],
-      line_items: [{ price_data: { currency: 'usd', product_data: { name: `PO: ${po_number}`, description: 'The Heavy Terminal' }, unit_amount: Math.round(total_cost * 100) }, quantity: 1 }],
+      payment_method_types: ['card', 'us_bank_account'], // 🔒 FORT KNOX: Allows secure ACH & Credit Cards
+      line_items: [{ price_data: { currency: 'usd', product_data: { name: `PO: ${po_number}`, description: 'The Heavy Terminal Wholesale Inventory' }, unit_amount: Math.round(total_cost * 100) }, quantity: 1 }],
       mode: 'payment',
+      metadata: { order_id: order_id }, // 🔒 FORT KNOX: Attaches the Order ID invisibly to the transaction for the Webhook to read
       success_url: `${origin}/?checkout_success=true&order_id=${order_id}`,
       cancel_url: `${origin}/?checkout_cancel=true`,
     });
@@ -296,8 +338,11 @@ app.post('/api/create-checkout-session', async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
+// We completely disable the old "Frontend" confirm route so hackers can't use it.
 app.post('/api/confirm-payment', async (req, res) => {
-  try { await pool.query(`UPDATE purchase_orders SET payment_status = 'paid' WHERE id = $1`, [req.body.order_id]); res.json({ success: true }); } catch (err) { res.status(500).json({ success: false }); }
+  // Now, this route simply returns success so the frontend stops loading, 
+  // but the ACTUAL database update is handled exclusively by the secure Webhook above.
+  res.json({ success: true }); 
 });
 
 app.post('/api/create-user', async (req, res) => {
